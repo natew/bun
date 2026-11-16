@@ -1510,3 +1510,25 @@ it("object loader: an error thrown by a getter on the exports object rejects the
   });
   expect(() => require("object-loader-throwing-esmodule")).toThrow(boom);
 });
+
+it.concurrent("onLoad preserves CommonJS exports for import and require", async () => {
+  using dir = tempDir("plugin-cjs-onload", {
+    "preload.ts": `import { readFileSync } from "node:fs";
+      Bun.plugin({ name: "pass-through", setup(build) {
+        build.onLoad({ filter: /target\\.cjs$/ }, args => ({ contents: readFileSync(args.path, "utf8"), loader: "js" }));
+      }});`,
+    "target.cjs": `module.exports = { value: 42, add: (a, b) => a + b };`,
+    "entry.ts": `import { value, add } from "./target.cjs";
+      console.log(JSON.stringify({ value, sum: add(1, 2), required: require("./target.cjs").value }));`,
+  });
+  await using proc = Bun.spawn({
+    cmd: [bunExe(), "--preload", "./preload.ts", "entry.ts"],
+    env: bunEnv,
+    cwd: String(dir),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
+  expect(stdout.trim() || stderr).toBe('{"value":42,"sum":3,"required":42}');
+  expect(exitCode).toBe(0);
+});
